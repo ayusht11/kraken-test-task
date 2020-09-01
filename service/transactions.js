@@ -68,6 +68,24 @@ const _aggregateValidDeposits = () => {
   ]).exec();
 };
 
+const _findMinMax = () => {
+  return TransactionModel.aggregate([
+    {
+      $match: {
+        confirmations: { $gte: 6 },
+        $or: [{ category: 'receive' }, { category: 'generate' }],
+      },
+    },
+    {
+      $group: {
+        _id: null,
+        max: { $max: '$amount' },
+        min: { $min: '$amount' },
+      },
+    },
+  ]).exec();
+};
+
 /**
  * Save data to mongodb then query and process results
  * @param {Array} transactions
@@ -88,7 +106,10 @@ const processTransactions = async (transactions) => {
     await _executeBatchUpdate(TransactionModel, transactions);
 
     // run aggregation pipeline
-    const response = await _aggregateValidDeposits();
+    let response = await _aggregateValidDeposits();
+    const [{ min, max }] = await _findMinMax();
+    response.min = min;
+    response.max = max;
     db.close();
 
     return response;
@@ -101,10 +122,10 @@ const processTransactions = async (transactions) => {
  * Process database response and print data in required format
  * @param {Array} accountTxSummary
  */
-const displayDepositInfo = (accountTxSummary) => {
+const displayDepositInfo = async (accountTxSummary) => {
   const txsForUnkownAccounts = accountTxSummary.reduce(
     (account, current) => {
-      if (!knownCustomers[current]) {
+      if (!knownCustomers[current._id]) {
         account.sum += current.sum;
         account.count += current.count;
       }
@@ -117,9 +138,8 @@ const displayDepositInfo = (accountTxSummary) => {
     (transaction) => knownCustomers[transaction._id]
   );
 
-  const sums = accountTxSummary.map((account) => account.sum);
-  const maxAmount = Math.max(...sums);
-  const minAmount = Math.min(...sums);
+  const maxAmount = accountTxSummary.max;
+  const minAmount = accountTxSummary.min;
 
   for (let address in knownCustomers) {
     const name = knownCustomers[address];
